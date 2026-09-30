@@ -18,30 +18,25 @@
  */
 package org.apache.maven.plugins.jmod;
 
-import javax.inject.Inject;
-
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.shared.utils.cli.Commandline;
-import org.apache.maven.toolchain.ToolchainManager;
 
 /**
  * This goal is to support the usage of <code>jmod describe</code>.
  *
  * @author Karl Heinz Marbaise <a href="mailto:khmarbaise@apache.org">khmarbaise@apache.org</a>
  */
-@Mojo(name = "describe", requiresDependencyResolution = ResolutionScope.NONE, defaultPhase = LifecyclePhase.NONE)
+@Mojo(name = "describe")
 public class JModDescribeMojo extends AbstractJModMojo {
 
     @Parameter(defaultValue = "${project.build.directory}", required = true, readonly = true)
-    private File outputDirectory;
+    private Path outputDirectory;
 
     /**
      * The name of the jmod file which is examined via <code>jmod describe jmodFile</code>
@@ -52,36 +47,32 @@ public class JModDescribeMojo extends AbstractJModMojo {
             property = "jmodfile",
             required = true)
     // @formatter:on
-    private File jmodFile;
+    private Path jmodFile;
 
-    @Inject
-    public JModDescribeMojo(ToolchainManager toolchainManager) {
-        super(toolchainManager);
-    }
-
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    @Override
+    public void execute() throws MojoException {
         try {
             String jModExecutable = getJModExecutable();
-            getLog().debug("Toolchain in maven-jmod-plugin: jmod [ " + jModExecutable + " ]");
+            log.debug("Toolchain in maven-jmod-plugin: jmod [ " + jModExecutable + " ]");
 
             Commandline cmd = createJModDescribeCommandLine();
             cmd.setExecutable(jModExecutable);
 
-            getLog().info("The following information is contained in the module file " + jmodFile.getAbsolutePath());
+            log.info("The following information is contained in the module file " + jmodFile.toAbsolutePath());
             executeCommand(cmd, outputDirectory);
         } catch (IOException e) {
-            throw new MojoFailureException("Unable to find jmod command: " + e.getMessage(), e);
+            throw new MojoException("Unable to find jmod command: " + e.getMessage(), e);
         }
     }
 
-    private Commandline createJModDescribeCommandLine() throws MojoFailureException {
-        if (!jmodFile.exists() || !jmodFile.isFile()) {
-            throw new MojoFailureException("Unable to find " + jmodFile.getAbsolutePath());
+    private Commandline createJModDescribeCommandLine() throws MojoException {
+        if (!Files.isRegularFile(jmodFile)) {
+            throw new MojoException("Unable to find " + jmodFile.toAbsolutePath());
         }
 
         Commandline commandLine = new Commandline();
         commandLine.createArg().setValue("describe");
-        commandLine.createArg().setValue(jmodFile.getAbsolutePath());
+        commandLine.createArg().setValue(jmodFile.toAbsolutePath().toString());
         return commandLine;
     }
 }

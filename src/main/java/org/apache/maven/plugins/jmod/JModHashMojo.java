@@ -18,20 +18,14 @@
  */
 package org.apache.maven.plugins.jmod;
 
-import javax.inject.Inject;
-
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.shared.utils.cli.Commandline;
-import org.apache.maven.toolchain.ToolchainManager;
 
 /**
  * <pre>
@@ -41,7 +35,7 @@ import org.apache.maven.toolchain.ToolchainManager;
  * @author Karl Heinz Marbaise <a href="mailto:khmarbaise@apache.org">khmarbaise@apache.org</a>
  */
 // TODO: Reconsider resolution scope, phase ?
-@Mojo(name = "hash", requiresDependencyResolution = ResolutionScope.COMPILE, defaultPhase = LifecyclePhase.PACKAGE)
+@Mojo(name = "hash", defaultPhase = "package")
 public class JModHashMojo extends AbstractJModMojo {
 
     /**
@@ -60,7 +54,7 @@ public class JModHashMojo extends AbstractJModMojo {
      * <code>--config &lt;path&gt;</code> Location of user-editable config files.
      */
     @Parameter
-    private File config;
+    private Path config;
 
     @Parameter
     private boolean dryRun;
@@ -72,7 +66,7 @@ public class JModHashMojo extends AbstractJModMojo {
     private String mainClass;
 
     @Parameter
-    private List<File> libs;
+    private List<Path> libs;
 
     @Parameter
     private String moduleVersion;
@@ -82,20 +76,16 @@ public class JModHashMojo extends AbstractJModMojo {
      * Must be a directory.
      */
     @Parameter(required = true)
-    private File modulePath;
+    private Path modulePath;
 
-    @Inject
-    public JModHashMojo(ToolchainManager toolchainManager) {
-        super(toolchainManager);
-    }
-
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    @Override
+    public void execute() throws MojoException {
 
         String jModExecutable;
         try {
             jModExecutable = getJModExecutable();
         } catch (IOException e) {
-            throw new MojoFailureException("Unable to find jmod command: " + e.getMessage(), e);
+            throw new MojoException("Unable to find jmod command: " + e.getMessage(), e);
         }
 
         Commandline cmd = createJModHashCommandLine();

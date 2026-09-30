@@ -18,10 +18,10 @@
  */
 package org.apache.maven.plugins.jmod;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -29,21 +29,18 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.PathScope;
+import org.apache.maven.api.Toolchain;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.DependencyResolver;
+import org.apache.maven.api.services.ProjectManager;
 import org.apache.maven.shared.utils.StringUtils;
 import org.apache.maven.shared.utils.cli.Commandline;
 import org.apache.maven.shared.utils.io.FileUtils;
 import org.apache.maven.shared.utils.logging.MessageUtils;
-import org.apache.maven.toolchain.Toolchain;
-import org.apache.maven.toolchain.ToolchainManager;
-import org.apache.maven.toolchain.java.JavaToolchainImpl;
 import org.codehaus.plexus.languages.java.jpms.JavaModuleDescriptor;
 import org.codehaus.plexus.languages.java.jpms.LocationManager;
 import org.codehaus.plexus.languages.java.jpms.ModuleNameSource;
@@ -57,13 +54,7 @@ import org.codehaus.plexus.languages.java.jpms.ResolvePathsResult;
  *
  * @author Karl Heinz Marbaise <a href="mailto:khmarbaise@apache.org">khmarbaise@apache.org</a>
  */
-// CHECKSTYLE_OFF: LineLength
-@Mojo(
-        name = "create",
-        requiresDependencyResolution = ResolutionScope.RUNTIME,
-        defaultPhase = LifecyclePhase.PACKAGE,
-        requiresProject = true)
-// CHECKSTYLE_ON: LineLength
+@Mojo(name = "create", defaultPhase = "package")
 public class JModCreateMojo extends AbstractJModMojo {
     private static final String JMODS = "jmods";
 
@@ -71,10 +62,10 @@ public class JModCreateMojo extends AbstractJModMojo {
 
     private List<String> modulepathElements;
 
-    @Parameter(defaultValue = "${project.compileClasspathElements}", readonly = true, required = true)
-    private List<String> compilePath;
+    @Inject
+    private DependencyResolver dependencyResolver;
 
-    private final LocationManager locationManager;
+    private final LocationManager locationManager = new LocationManager();
 
     /**
      * Specifies one or more directories containing native commands to be copied. The given directories are relative to
@@ -274,28 +265,23 @@ public class JModCreateMojo extends AbstractJModMojo {
     private String warnIfResolved;
 
     @Parameter(defaultValue = "${project.build.outputDirectory}", required = true, readonly = true)
-    private File targetClassesDirectory;
+    private Path targetClassesDirectory;
 
     @Parameter(defaultValue = "${project.build.directory}", required = true, readonly = true)
-    private File outputDirectory;
+    private Path outputDirectory;
 
     // calculated based on jmod(.exe)/../..
     private File javaHome;
 
-    @Inject
-    public JModCreateMojo(ToolchainManager toolchainManager, LocationManager locationManager) {
-        super(toolchainManager);
-        this.locationManager = locationManager;
-    }
-
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    @Override
+    public void execute() throws MojoException {
         try {
             String jModExecutable = getJModExecutable();
             File jModExecuteableFile = new File(jModExecutable);
             javaHome = jModExecuteableFile.getParentFile().getParentFile();
             File jmodsFolderJDK = new File(javaHome, JMODS);
-            getLog().debug("Parent: " + javaHome.getAbsolutePath());
-            getLog().debug("jmodsFolder: " + jmodsFolderJDK.getAbsolutePath());
+            log.debug("Parent: " + javaHome.getAbsolutePath());
+            log.debug("jmodsFolder: " + jmodsFolderJDK.getAbsolutePath());
 
             if (!jmodsFolderJDK.exists()) {
                 throw new IOException(
@@ -306,12 +292,12 @@ public class JModCreateMojo extends AbstractJModMojo {
 
             failIfParametersAreNotInTheirValidValueRanges();
 
-            getLog().debug("Toolchain in maven-jmod-plugin: jmod [ " + jModExecutable + " ]");
+            log.debug("Toolchain in maven-jmod-plugin: jmod [ " + jModExecutable + " ]");
 
             // We need to put the resulting x.jmod files into jmods folder otherwise is
             // seemed to be not working.
             // Check why?
-            File modsFolder = new File(outputDirectory, "jmods");
+            File modsFolder = new File(outputDirectory.toFile(), "jmods");
             File resultingJModFile = new File(modsFolder, outputFileName + ".jmod");
 
             deleteOutputIfAlreadyExists(resultingJModFile);
@@ -325,37 +311,38 @@ public class JModCreateMojo extends AbstractJModMojo {
             executeCommand(cmd, outputDirectory);
 
             if (projectHasAlreadySetAnArtifact()) {
-                throw new MojoExecutionException("You have to use a classifier "
+                throw new MojoException("You have to use a classifier "
                         + "to attach supplemental artifacts to the project instead of replacing them.");
             }
 
-            getProject().getArtifact().setFile(resultingJModFile);
+            session.getService(ProjectManager.class)
+                    .attachArtifact(project, project.getMainArtifact().orElseThrow(), resultingJModFile.toPath());
         } catch (IOException e) {
-            throw new MojoFailureException("Unable to find jmod command: " + e.getMessage(), e);
+            throw new MojoException("Unable to find jmod command: " + e.getMessage(), e);
         }
     }
 
-    private void deleteOutputIfAlreadyExists(File resultingJModFile) throws MojoFailureException {
+    private void deleteOutputIfAlreadyExists(File resultingJModFile) throws MojoException {
         if (resultingJModFile.exists() && resultingJModFile.isFile()) {
             try {
-                getLog().debug("Deleting the existing " + resultingJModFile.getAbsolutePath() + " file.");
+                log.debug("Deleting the existing " + resultingJModFile.getAbsolutePath() + " file.");
                 FileUtils.forceDelete(resultingJModFile);
             } catch (IOException e) {
                 String message = "Failure during deleting of file " + resultingJModFile.getAbsolutePath();
-                getLog().error(message);
-                throw new MojoFailureException(message);
+                log.error(message);
+                throw new MojoException(message);
             }
         }
     }
 
-    private void failIfParametersAreNotInTheirValidValueRanges() throws MojoFailureException {
+    private void failIfParametersAreNotInTheirValidValueRanges() throws MojoException {
         if (warnIfResolved != null) {
             String x = warnIfResolved.toLowerCase().trim();
             if (!"deprecated".equals(x) && !"deprecated-for-removal".equals(x) && !"incubating".equals(x)) {
                 String message = "The parameter warnIfResolved does not contain a valid value. "
                         + "Valid values are 'deprecated', 'deprecated-for-removal' or 'incubating'.";
-                getLog().error(message);
-                throw new MojoFailureException(message);
+                log.error(message);
+                throw new MojoException(message);
             }
         }
 
@@ -372,27 +359,31 @@ public class JModCreateMojo extends AbstractJModMojo {
     }
 
     private void throwExceptionIfNotExistOrNotADirectory(List<String> configurations, String partialMessage)
-            throws MojoFailureException {
+            throws MojoException {
         for (String configLocation : configurations) {
             File dir = new File(configLocation);
             if (!dir.exists() || !dir.isDirectory()) {
                 String message = "The directory " + configLocation + " for " + partialMessage
                         + " parameter does not exist " + "or is not a directory. ";
-                getLog().error(message);
-                throw new MojoFailureException(message);
+                log.error(message);
+                throw new MojoException(message);
             }
         }
     }
 
-    private List<File> getCompileClasspathElements(MavenProject project) {
-        List<File> list = new ArrayList<File>(project.getArtifacts().size() + 1);
+    private List<File> getCompileClasspathElements() {
+        Collection<Path> dependencies = dependencyResolver
+                .resolve(session, project, PathScope.MAIN_RUNTIME)
+                .getDependencies()
+                .values();
+        List<File> list = new ArrayList<>(1 + dependencies.size());
 
-        if (targetClassesDirectory.exists()) {
-            list.add(new File(project.getBuild().getOutputDirectory()));
+        if (Files.exists(targetClassesDirectory)) {
+            list.add(targetClassesDirectory.toFile());
         }
 
-        for (Artifact a : project.getArtifacts()) {
-            list.add(a.getFile());
+        for (Path path : dependencies) {
+            list.add(path.toFile());
         }
         return list;
     }
@@ -402,14 +393,14 @@ public class JModCreateMojo extends AbstractJModMojo {
 
         // Assuming that the module-info.java is already compiled by compiler plugin so only
         // check if the module-info.class file exists.
-        File moduleInfo = new File(targetClassesDirectory, "module-info.class");
+        File moduleInfo = new File(targetClassesDirectory.toFile(), "module-info.class");
 
         if (moduleInfo.exists() && moduleInfo.isFile()) {
-            getLog().debug("We have found a module-info.class file.");
+            log.debug("We have found a module-info.class file.");
             hasModuleDescriptor = true;
         }
 
-        Collection<File> dependencyArtifacts = getCompileClasspathElements(getProject());
+        Collection<File> dependencyArtifacts = getCompileClasspathElements();
 
         if (hasModuleDescriptor) {
             // For now only allow named modules. Once we can create a graph with ASM we can specify exactly the modules,
@@ -426,8 +417,9 @@ public class JModCreateMojo extends AbstractJModMojo {
                         ResolvePathsRequest.ofFiles(dependencyArtifacts).setMainModuleDescriptor(moduleInfo);
 
                 Toolchain toolchain = getToolchain();
-                if (toolchain != null && toolchain instanceof JavaToolchainImpl) {
-                    request.setJdkHome(new File(((JavaToolchainImpl) toolchain).getJavaHome()));
+                if (toolchain != null) {
+                    // The JDK home of the toolchain is where the jmod executable found by getJModExecutable() lives.
+                    request.setJdkHome(javaHome);
                 }
 
                 resolvePathsResult = locationManager.resolvePaths(request);
@@ -436,7 +428,7 @@ public class JModCreateMojo extends AbstractJModMojo {
 
                 for (Map.Entry<File, ModuleNameSource> entry :
                         resolvePathsResult.getModulepathElements().entrySet()) {
-                    getLog().debug("File: " + entry.getKey().getAbsolutePath() + " "
+                    log.debug("File: " + entry.getKey().getAbsolutePath() + " "
                             + entry.getValue().name());
                     if (ModuleNameSource.FILENAME.equals(entry.getValue())) {
                         final String message = "Required filename-based automodules detected. "
@@ -444,7 +436,7 @@ public class JModCreateMojo extends AbstractJModMojo {
 
                         if (moduleDescriptor.exports().isEmpty()) {
                             // application
-                            getLog().info(message);
+                            log.info(message);
                         } else {
                             // library
                             writeBoxedWarning(message);
@@ -458,13 +450,13 @@ public class JModCreateMojo extends AbstractJModMojo {
                         // jmod create does not accept .jmod artifacts on --class-path.
                         addModulePathElement(file);
                     } else {
-                        getLog().debug("classpathElements: File: " + file.getPath());
+                        log.debug("classpathElements: File: " + file.getPath());
                         classpathElements.add(file.getPath());
                     }
                 }
 
                 for (File file : resolvePathsResult.getModulepathElements().keySet()) {
-                    getLog().debug("modulepathElements: File: " + file.getPath());
+                    log.debug("modulepathElements: File: " + file.getPath());
                     if (file.isDirectory()) {
                         modulepathElements.add(file.getPath());
                     } else {
@@ -472,7 +464,7 @@ public class JModCreateMojo extends AbstractJModMojo {
                     }
                 }
             } catch (IOException e) {
-                getLog().warn(e.getMessage());
+                log.warn(e.getMessage());
             }
         } else {
             modulepathElements = Collections.emptyList();
@@ -493,7 +485,7 @@ public class JModCreateMojo extends AbstractJModMojo {
     }
 
     private void addModulePathElement(File file) {
-        getLog().debug("modulepathElements (from classpath jmod): File: " + file.getPath());
+        log.debug("modulepathElements (from classpath jmod): File: " + file.getPath());
         if (file.isDirectory()) {
             modulepathElements.add(file.getPath());
         } else {
@@ -514,8 +506,8 @@ public class JModCreateMojo extends AbstractJModMojo {
         } else {
             classPaths = new ArrayList<>(1);
         }
-        if (targetClassesDirectory.exists()) {
-            classPaths.add(targetClassesDirectory.getAbsolutePath());
+        if (Files.exists(targetClassesDirectory)) {
+            classPaths.add(targetClassesDirectory.toAbsolutePath().toString());
         }
 
         command.createArg()
@@ -606,7 +598,7 @@ public class JModCreateMojo extends AbstractJModMojo {
         List<String> result = new ArrayList<>();
 
         for (String configLocation : relativeDirectories) {
-            File dir = new File(getProject().getBasedir(), configLocation);
+            File dir = new File(getProject().getBasedir().toFile(), configLocation);
             result.add(dir.getAbsolutePath());
         }
         return result;
@@ -614,7 +606,7 @@ public class JModCreateMojo extends AbstractJModMojo {
 
     private boolean doDefaultsExist(String defaultLocation) {
         boolean result = false;
-        File dir = new File(getProject().getBasedir(), defaultLocation);
+        File dir = new File(getProject().getBasedir().toFile(), defaultLocation);
         if (dir.exists() && dir.isDirectory()) {
             result = true;
         }
@@ -634,8 +626,8 @@ public class JModCreateMojo extends AbstractJModMojo {
 
     private void writeBoxedWarning(String message) {
         String line = StringUtils.repeat("*", message.length() + 4);
-        getLog().warn(line);
-        getLog().warn("* " + MessageUtils.buffer().strong(message) + " *");
-        getLog().warn(line);
+        log.warn(line);
+        log.warn("* " + MessageUtils.buffer().strong(message) + " *");
+        log.warn(line);
     }
 }
