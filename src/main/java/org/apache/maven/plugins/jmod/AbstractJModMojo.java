@@ -20,19 +20,23 @@ package org.apache.maven.plugins.jmod;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.Toolchain;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.ProjectManager;
+import org.apache.maven.api.services.ToolchainManager;
 import org.apache.maven.shared.utils.cli.CommandLineException;
 import org.apache.maven.shared.utils.cli.CommandLineUtils;
 import org.apache.maven.shared.utils.cli.Commandline;
-import org.apache.maven.toolchain.Toolchain;
-import org.apache.maven.toolchain.ToolchainManager;
 import org.codehaus.plexus.util.Os;
 import org.codehaus.plexus.util.StringUtils;
 
@@ -43,29 +47,28 @@ import org.codehaus.plexus.util.StringUtils;
  *
  * @author Karl Heinz Marbaise <a href="mailto:khmarbaise@apache.org">khmarbaise@apache.org</a>
  */
-public abstract class AbstractJModMojo extends AbstractMojo {
+public abstract class AbstractJModMojo implements org.apache.maven.api.plugin.Mojo {
 
-    @Parameter(defaultValue = "${project}", readonly = true, required = true)
-    private MavenProject project;
+    @Inject
+    protected Project project;
 
-    @Parameter(defaultValue = "${session}", readonly = true, required = true)
-    private MavenSession session;
+    @Inject
+    protected Session session;
+
+    @Inject
+    protected ToolchainManager toolchainManager;
+
+    @Inject
+    protected Log log;
 
     /**
      * <p>
      * Specify the requirements for this JDK toolchain. This overrules the toolchain selected by the
      * maven-toolchain-plugin.
      * </p>
-     * <strong>note:</strong> requires at least Maven 3.3.1.
      */
     @Parameter
     private Map<String, String> jdkToolchain;
-
-    private final ToolchainManager toolchainManager;
-
-    protected AbstractJModMojo(ToolchainManager toolchainManager) {
-        this.toolchainManager = toolchainManager;
-    }
 
     // TODO: Check how to prevent code duplication in maven-jlink, maven-jmod and maven-jdeps plugin?
     protected String getJModExecutable() throws IOException {
@@ -132,17 +135,16 @@ public abstract class AbstractJModMojo extends AbstractMojo {
     }
 
     protected boolean projectHasAlreadySetAnArtifact() {
-        if (getProject().getArtifact().getFile() != null) {
-            return getProject().getArtifact().getFile().isFile();
-        } else {
-            return false;
-        }
+        return session.getService(ProjectManager.class)
+                .getPath(project)
+                .filter(Files::isRegularFile)
+                .isPresent();
     }
 
-    protected void executeCommand(Commandline cmd, File outputDirectory) throws MojoExecutionException {
-        if (getLog().isDebugEnabled()) {
+    protected void executeCommand(Commandline cmd, Path outputDirectory) throws MojoException {
+        if (log.isDebugEnabled()) {
             // no quoted arguments ???
-            getLog().debug(CommandLineUtils.toString(cmd.getCommandline()).replaceAll("'", ""));
+            log.debug(CommandLineUtils.toString(cmd.getCommandline()).replaceAll("'", ""));
         }
 
         CommandLineUtils.StringStreamConsumer err = new CommandLineUtils.StringStreamConsumer();
@@ -157,7 +159,7 @@ public abstract class AbstractJModMojo extends AbstractMojo {
             if (exitCode != 0) {
                 if (StringUtils.isNotEmpty(output)) {
                     // Reconsider to use WARN / ERROR ?
-                    getLog().info(output);
+                    log.info(output);
                 }
 
                 StringBuilder msg = new StringBuilder("\nExit code: ");
@@ -168,17 +170,17 @@ public abstract class AbstractJModMojo extends AbstractMojo {
                 msg.append('\n');
                 msg.append("Command line was: ").append(cmd).append('\n').append('\n');
 
-                throw new MojoExecutionException(msg.toString());
+                throw new MojoException(msg.toString());
             }
 
             if (StringUtils.isNotEmpty(output)) {
                 String[] splitLines = StringUtils.split(output, "\n");
                 for (String outputLine : splitLines) {
-                    getLog().info(outputLine);
+                    log.info(outputLine);
                 }
             }
         } catch (CommandLineException e) {
-            throw new MojoExecutionException("Unable to execute jmod command: " + e.getMessage(), e);
+            throw new MojoException("Unable to execute jmod command: " + e.getMessage(), e);
         }
     }
 
@@ -204,25 +206,24 @@ public abstract class AbstractJModMojo extends AbstractMojo {
 
         if (jdkToolchain != null) {
             List<Toolchain> tcs = toolchainManager.getToolchains(session, "jdk", jdkToolchain);
-
-            if (tcs != null && tcs.size() > 0) {
+            if (tcs != null && !tcs.isEmpty()) {
                 tc = tcs.get(0);
             }
         }
 
         if (tc == null) {
             // TODO: Check if we should make the type configurable?
-            tc = toolchainManager.getToolchainFromBuildContext("jdk", session);
+            tc = toolchainManager.getToolchainFromBuildContext(session, "jdk").orElse(null);
         }
 
         return tc;
     }
 
-    public MavenProject getProject() {
+    public Project getProject() {
         return project;
     }
 
-    public MavenSession getSession() {
+    public Session getSession() {
         return session;
     }
 }

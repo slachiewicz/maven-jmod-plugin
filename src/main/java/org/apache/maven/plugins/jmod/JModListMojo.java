@@ -18,30 +18,25 @@
  */
 package org.apache.maven.plugins.jmod;
 
-import javax.inject.Inject;
-
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.shared.utils.cli.Commandline;
-import org.apache.maven.toolchain.ToolchainManager;
 
 /**
  * This goal is to support the usage of <code>jmod list</code> to show the content of a <code>jmod</code> file.
  *
  * @author Karl Heinz Marbaise <a href="mailto:khmarbaise@apache.org">khmarbaise@apache.org</a>
  */
-@Mojo(name = "list", requiresDependencyResolution = ResolutionScope.NONE, defaultPhase = LifecyclePhase.NONE)
+@Mojo(name = "list")
 public class JModListMojo extends AbstractJModMojo {
 
     @Parameter(defaultValue = "${project.build.directory}", required = true, readonly = true)
-    private File outputDirectory;
+    private Path outputDirectory;
 
     /**
      * The name of the jmod file which is examined via <code>jmod list jmodFile</code>.
@@ -52,36 +47,32 @@ public class JModListMojo extends AbstractJModMojo {
             property = "jmodfile",
             required = true)
     // @formatter:on
-    private File jmodFile;
+    private Path jmodFile;
 
-    @Inject
-    public JModListMojo(ToolchainManager toolchainManager) {
-        super(toolchainManager);
-    }
-
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    @Override
+    public void execute() throws MojoException {
         try {
             String jModExecutable = getJModExecutable();
-            getLog().debug("Toolchain in maven-jmod-plugin: jmod [ " + jModExecutable + " ]");
+            log.debug("Toolchain in maven-jmod-plugin: jmod [ " + jModExecutable + " ]");
 
             Commandline cmd = createJModListCommandLine();
             cmd.setExecutable(jModExecutable);
 
-            getLog().info("The following files are contained in the module file " + jmodFile.getAbsolutePath());
+            log.info("The following files are contained in the module file " + jmodFile.toAbsolutePath());
             executeCommand(cmd, outputDirectory);
         } catch (IOException e) {
-            throw new MojoFailureException("Unable to find jmod command: " + e.getMessage(), e);
+            throw new MojoException("Unable to find jmod command: " + e.getMessage(), e);
         }
     }
 
-    private Commandline createJModListCommandLine() throws MojoFailureException {
-        if (!jmodFile.exists() || !jmodFile.isFile()) {
-            throw new MojoFailureException("Unable to find " + jmodFile.getAbsolutePath());
+    private Commandline createJModListCommandLine() throws MojoException {
+        if (!Files.isRegularFile(jmodFile)) {
+            throw new MojoException("Unable to find " + jmodFile.toAbsolutePath());
         }
 
         Commandline commandLine = new Commandline();
         commandLine.createArg().setValue("list");
-        commandLine.createArg().setValue(jmodFile.getAbsolutePath());
+        commandLine.createArg().setValue(jmodFile.toAbsolutePath().toString());
         return commandLine;
     }
 }
